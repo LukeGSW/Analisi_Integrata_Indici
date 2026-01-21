@@ -369,15 +369,15 @@ def run_complete_analysis():
     # 5. Calcola segnali
     df_signals = calculate_signals(breadth_df)
     
-    # 6. Merge tutto
-    spx_df = pd.DataFrame({'SPX_Price': spx_prices}, index=spx_prices.index)
-    
+    # 6. Merge tutto (senza SPX_Price prima)
     df_master = pd.concat([
         breadth_df,
         target_events,
-        df_signals[['Exposure', 'Signal']],
-        spx_df
+        df_signals[['Exposure', 'Signal']]
     ], axis=1, join='inner')
+    
+    # Aggiungi SPX_Price come Series (non DataFrame)
+    df_master['SPX_Price'] = spx_prices.loc[df_master.index]
     
     # Verifica che il merge sia riuscito
     if df_master.empty:
