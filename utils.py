@@ -290,14 +290,16 @@ def run_backtest(df_master, initial_capital=INITIAL_CAPITAL):
     """
     df = df_master.copy()
     
-    # Returns giornalieri SPX
-    df['SPX_Returns'] = df['SPX_Price'].pct_change()
+    # Returns giornalieri SPX - forza a Series pulita
+    spx_price_series = pd.Series(df['SPX_Price'].values.ravel(), index=df.index)
+    df['SPX_Returns'] = spx_price_series.pct_change()
     
     # Buy & Hold
     df['BuyHold_Equity'] = initial_capital * (1 + df['SPX_Returns']).cumprod()
     
-    # Strategia Dinamica
-    df['Strategy_Returns'] = df['SPX_Returns'] * df['Exposure']
+    # Strategia Dinamica - forza Exposure a Series pulita
+    exposure_series = pd.Series(df['Exposure'].values.ravel(), index=df.index)
+    df['Strategy_Returns'] = df['SPX_Returns'] * exposure_series
     df['Strategy_Equity'] = initial_capital * (1 + df['Strategy_Returns']).cumprod()
     
     # Calcola metriche
@@ -368,8 +370,13 @@ def run_complete_analysis():
     
     # 5. Costruisci df_master ESATTAMENTE come nel notebook originale
     df_master = breadth_df.copy()
-    df_master = df_master.join(target_events, how='inner')  # Usa .join() come nel notebook
-    df_master['SPX_Price'] = spx_prices  # Assegnazione diretta
+    df_master = df_master.join(target_events, how='inner')
+    
+    # CRITICAL FIX: Forza spx_prices a numpy array 1D
+    if isinstance(spx_prices, pd.DataFrame):
+        df_master['SPX_Price'] = spx_prices.values.ravel()  # Forza 1D
+    else:
+        df_master['SPX_Price'] = spx_prices.values  # Series to numpy array 1D
     
     # 6. Calcola segnali DIRETTAMENTE su df_master (come nel notebook)
     # BOTTOM FORTE
@@ -403,27 +410,27 @@ def run_complete_analysis():
     df_master['Breadth_Change_5d'] = df_master['Breadth_Pct_Above_MA125'].diff(5)
     signal_risk_crash = df_master['Breadth_Change_5d'] < RiskThresholds.CRASH_BREADTH_CHANGE
     
-    # Calcola esposizione (come nel notebook)
-    df_master['Exposure'] = DefaultSettings.NEUTRAL_EXPOSURE
-    df_master['Signal'] = 'NEUTRAL'
+    # Calcola esposizione (come nel notebook) - usa valori scalari per assegnazioni
+    df_master['Exposure'] = float(DefaultSettings.NEUTRAL_EXPOSURE)  # Scalar float
+    df_master['Signal'] = 'NEUTRAL'  # String scalar
     
-    # PRIORITÀ 1: BOTTOM
-    df_master.loc[signal_bottom_strong, 'Exposure'] = BottomThresholds.STRONG_EXPOSURE
+    # PRIORITÀ 1: BOTTOM - assegna valori scalari
+    df_master.loc[signal_bottom_strong, 'Exposure'] = float(BottomThresholds.STRONG_EXPOSURE)
     df_master.loc[signal_bottom_strong, 'Signal'] = 'BUY_STRONG'
     
-    df_master.loc[signal_bottom_moderate, 'Exposure'] = BottomThresholds.MODERATE_EXPOSURE
+    df_master.loc[signal_bottom_moderate, 'Exposure'] = float(BottomThresholds.MODERATE_EXPOSURE)
     df_master.loc[signal_bottom_moderate, 'Signal'] = 'BUY_MODERATE'
     
-    # PRIORITÀ 2: RISK
+    # PRIORITÀ 2: RISK - assegna valori scalari
     neutral_mask = (df_master['Signal'] == 'NEUTRAL')
     
-    df_master.loc[neutral_mask & signal_risk_euphoria, 'Exposure'] = RiskThresholds.EUPHORIA_EXPOSURE
+    df_master.loc[neutral_mask & signal_risk_euphoria, 'Exposure'] = float(RiskThresholds.EUPHORIA_EXPOSURE)
     df_master.loc[neutral_mask & signal_risk_euphoria, 'Signal'] = 'RISK_EUPHORIA'
     
-    df_master.loc[neutral_mask & signal_risk_deterioration, 'Exposure'] = RiskThresholds.DETERIORATION_EXPOSURE
+    df_master.loc[neutral_mask & signal_risk_deterioration, 'Exposure'] = float(RiskThresholds.DETERIORATION_EXPOSURE)
     df_master.loc[neutral_mask & signal_risk_deterioration, 'Signal'] = 'RISK_DETERIORATION'
     
-    df_master.loc[neutral_mask & signal_risk_crash, 'Exposure'] = RiskThresholds.CRASH_EXPOSURE
+    df_master.loc[neutral_mask & signal_risk_crash, 'Exposure'] = float(RiskThresholds.CRASH_EXPOSURE)
     df_master.loc[neutral_mask & signal_risk_crash, 'Signal'] = 'RISK_CRASH'
     
     # Verifica
