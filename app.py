@@ -377,12 +377,12 @@ def main():
     # Sidebar
     with st.sidebar:
         st.image("https://via.placeholder.com/200x80/667eea/ffffff?text=Kriterion+Quant", 
-                 use_container_width=True)
+                 width="stretch")
         
         st.markdown("---")
         st.markdown("### ⚙️ Controlli")
         
-        if st.button("🔄 Aggiorna Dati", use_container_width=True):
+        if st.button("🔄 Aggiorna Dati", width="stretch"):
             st.cache_data.clear()
             st.rerun()
         
@@ -522,20 +522,20 @@ def main():
         
         # Grafici principali
         st.markdown("### 💰 Equity Curves")
-        st.plotly_chart(create_equity_chart(df_master), use_container_width=True)
+        st.plotly_chart(create_equity_chart(df_master), width="stretch")
         
         st.markdown("### 📊 Esposizione Dinamica")
-        st.plotly_chart(create_exposure_chart(df_master), use_container_width=True)
+        st.plotly_chart(create_exposure_chart(df_master), width="stretch")
         
         st.markdown("### 📉 Drawdown Comparison")
-        st.plotly_chart(create_drawdown_chart(df_master), use_container_width=True)
+        st.plotly_chart(create_drawdown_chart(df_master), width="stretch")
     
     with tab2:
         st.markdown("### 📊 Indicatori Market Breadth")
         
-        st.plotly_chart(create_breadth_chart(df_master), use_container_width=True)
-        st.plotly_chart(create_rsi_chart(df_master), use_container_width=True)
-        st.plotly_chart(create_correlation_chart(df_master), use_container_width=True)
+        st.plotly_chart(create_breadth_chart(df_master), width="stretch")
+        st.plotly_chart(create_rsi_chart(df_master), width="stretch")
+        st.plotly_chart(create_correlation_chart(df_master), width="stretch")
         
         st.markdown("---")
         
@@ -551,7 +551,7 @@ def main():
             'Percentuale': [f"{p:.1f}%" for p in signal_pct.values]
         })
         
-        st.dataframe(df_signals, use_container_width=True, hide_index=True)
+        st.dataframe(df_signals, width="stretch", hide_index=True)
     
     with tab3:
         st.markdown("### 💡 Logica del Sistema")
@@ -649,7 +649,7 @@ def main():
             data=json_str,
             file_name=f"spx_system_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json",
-            use_container_width=True
+            width="stretch"
         )
         
         st.markdown("---")
