@@ -433,10 +433,8 @@ def main():
         try:
             df_master, metrics, current_state = run_complete_analysis()
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
             st.error(f"❌ Errore durante l'analisi: {e}")
-            st.code(error_details, language="python")
+            st.info("💡 Se il problema persiste, prova a ricaricare la pagina o contatta il supporto.")
             st.stop()
     
     # Info segnale
