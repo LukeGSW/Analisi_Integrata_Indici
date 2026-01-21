@@ -76,10 +76,19 @@ def load_all_indices(indices_dict):
     if len(common_dates) == 0:
         raise ValueError("Nessuna data comune tra gli indici! Verifica i dati.")
     
-    # Crea DataFrame allineati
-    df_close = pd.DataFrame({name: df.loc[common_dates, 'Close'] for name, df in raw_data.items()})
-    df_high = pd.DataFrame({name: df.loc[common_dates, 'High'] for name, df in raw_data.items()})
-    df_low = pd.DataFrame({name: df.loc[common_dates, 'Low'] for name, df in raw_data.items()})
+    # Crea DataFrame allineati CON INDEX ESPLICITO
+    df_close = pd.DataFrame(
+        {name: df.loc[common_dates, 'Close'] for name, df in raw_data.items()},
+        index=common_dates
+    )
+    df_high = pd.DataFrame(
+        {name: df.loc[common_dates, 'High'] for name, df in raw_data.items()},
+        index=common_dates
+    )
+    df_low = pd.DataFrame(
+        {name: df.loc[common_dates, 'Low'] for name, df in raw_data.items()},
+        index=common_dates
+    )
     
     # Verifica che i DataFrame non siano vuoti
     if df_close.empty or df_high.empty or df_low.empty:
@@ -162,13 +171,6 @@ def calculate_target_events(spx_prices):
     Returns:
         DataFrame con colonne: Target_Bottom, Target_Top
     """
-    # Validazione input
-    if not isinstance(spx_prices, pd.Series):
-        raise ValueError(f"spx_prices deve essere una Series, ricevuto: {type(spx_prices)}")
-    
-    if not isinstance(spx_prices.index, pd.DatetimeIndex):
-        raise ValueError(f"spx_prices.index deve essere DatetimeIndex, ricevuto: {type(spx_prices.index)}")
-    
     target_bottom = []
     target_top = []
     
@@ -203,8 +205,6 @@ def calculate_target_events(spx_prices):
         'Target_Bottom': target_bottom,
         'Target_Top': target_top
     }, index=spx_prices.index)
-    
-    print(f"DEBUG calculate_target_events: result shape = {result.shape}, index type = {type(result.index)}")
     
     return result
 
@@ -353,74 +353,44 @@ def run_complete_analysis():
         Tuple (df_master, metrics, current_state)
     """
     
-    try:
-        # 1. Download dati
-        print("DEBUG: Step 1 - Download dati...")
-        raw_data, df_close, df_high, df_low = load_all_indices(INDICES)
-        print(f"DEBUG: Downloaded {len(raw_data)} indices")
-        
-        # 2. Calcola Market Breadth
-        print("DEBUG: Step 2 - Calcola Market Breadth...")
-        breadth_df = calculate_market_breadth(df_close, df_high, df_low)
-        print(f"DEBUG: Breadth_df shape: {breadth_df.shape}, index type: {type(breadth_df.index)}")
-        
-        # 3. Allinea prezzi SPX
-        print("DEBUG: Step 3 - Allinea prezzi SPX...")
-        df_close_aligned = df_close.loc[breadth_df.index]
-        spx_prices = df_close_aligned['S&P 500']
-        print(f"DEBUG: SPX prices shape: {spx_prices.shape}, type: {type(spx_prices)}")
-        
-        # 4. Calcola eventi target
-        print("DEBUG: Step 4 - Calcola eventi target...")
-        target_events = calculate_target_events(spx_prices)
-        print(f"DEBUG: Target events shape: {target_events.shape}")
-        
-        # 5. Calcola segnali
-        print("DEBUG: Step 5 - Calcola segnali...")
-        df_signals = calculate_signals(breadth_df)
-        print(f"DEBUG: Signals shape: {df_signals.shape}")
-        
-        # 6. Merge tutto
-        print("DEBUG: Step 6 - Merge tutto...")
-        print(f"DEBUG: breadth_df index: {len(breadth_df.index)}, type: {type(breadth_df.index)}")
-        print(f"DEBUG: target_events index: {len(target_events.index)}, type: {type(target_events.index)}")
-        print(f"DEBUG: df_signals index: {len(df_signals.index)}, type: {type(df_signals.index)}")
-        print(f"DEBUG: spx_prices index: {len(spx_prices.index)}, type: {type(spx_prices.index)}")
-        
-        # Converti spx_prices a DataFrame prima
-        spx_df = pd.DataFrame({'SPX_Price': spx_prices}, index=spx_prices.index)
-        print(f"DEBUG: spx_df shape: {spx_df.shape}, index type: {type(spx_df.index)}")
-        
-        df_master = pd.concat([
-            breadth_df,
-            target_events,
-            df_signals[['Exposure', 'Signal']],
-            spx_df
-        ], axis=1, join='inner')
-        
-        print(f"DEBUG: df_master shape after concat: {df_master.shape}")
-        
-        # Verifica che il merge sia riuscito
-        if df_master.empty:
-            raise ValueError("DataFrame master vuoto dopo merge!")
-        
-        # 7. Backtest
-        print("DEBUG: Step 7 - Backtest...")
-        df_master, metrics = run_backtest(df_master)
-        print("DEBUG: Backtest completato")
-        
-        # 8. Stato attuale
-        print("DEBUG: Step 8 - Stato attuale...")
-        current_state = df_master.iloc[-1].to_dict()
-        current_state['date'] = df_master.index[-1]
-        print("DEBUG: Analisi completata con successo!")
-        
-        return df_master, metrics, current_state
-        
-    except Exception as e:
-        import traceback
-        print(f"DEBUG: ERRORE in step: {traceback.format_exc()}")
-        raise
+    # 1. Download dati
+    raw_data, df_close, df_high, df_low = load_all_indices(INDICES)
+    
+    # 2. Calcola Market Breadth
+    breadth_df = calculate_market_breadth(df_close, df_high, df_low)
+    
+    # 3. Allinea prezzi SPX
+    df_close_aligned = df_close.loc[breadth_df.index]
+    spx_prices = df_close_aligned['S&P 500']
+    
+    # 4. Calcola eventi target
+    target_events = calculate_target_events(spx_prices)
+    
+    # 5. Calcola segnali
+    df_signals = calculate_signals(breadth_df)
+    
+    # 6. Merge tutto
+    spx_df = pd.DataFrame({'SPX_Price': spx_prices}, index=spx_prices.index)
+    
+    df_master = pd.concat([
+        breadth_df,
+        target_events,
+        df_signals[['Exposure', 'Signal']],
+        spx_df
+    ], axis=1, join='inner')
+    
+    # Verifica che il merge sia riuscito
+    if df_master.empty:
+        raise ValueError("DataFrame master vuoto dopo merge!")
+    
+    # 7. Backtest
+    df_master, metrics = run_backtest(df_master)
+    
+    # 8. Stato attuale
+    current_state = df_master.iloc[-1].to_dict()
+    current_state['date'] = df_master.index[-1]
+    
+    return df_master, metrics, current_state
 
 # ==============================================================================
 # FUNZIONE EXPORT JSON
