@@ -110,14 +110,14 @@ def calculate_market_breadth(df_close, df_high, df_low):
     
     # 1. % Indici sopra MA125
     ma_125 = df_close.rolling(window=BreadthSettings.MA_PERIOD).mean()
-    above_ma = ((df_close > ma_125).sum(axis=1) / df_close.shape[1]).squeeze()
+    above_ma = (df_close > ma_125).sum(axis=1) / df_close.shape[1]
     
     # 2. RSI Medio
     rsi_values = pd.DataFrame()
     for col in df_close.columns:
         rsi = ta.rsi(df_close[col], length=BreadthSettings.RSI_PERIOD)
         rsi_values[col] = rsi
-    avg_rsi = rsi_values.mean(axis=1).squeeze()
+    avg_rsi = rsi_values.mean(axis=1)
     
     # 3. Correlazione Rolling 30D
     returns = df_close.pct_change()
@@ -145,11 +145,12 @@ def calculate_market_breadth(df_close, df_high, df_low):
             avg_corr = avg_correlation_robust(window)
             rolling_corr.append(avg_corr)
     
-    # Crea DataFrame - IMPORTANTE: tutte le Series devono essere 1D
-    breadth_df = pd.DataFrame(index=df_close.index)
-    breadth_df['Breadth_Pct_Above_MA125'] = above_ma
-    breadth_df['Breadth_Avg_RSI_20'] = avg_rsi
-    breadth_df['Breadth_Avg_Corr_30D'] = pd.Series(rolling_corr, index=df_close.index)
+    # Crea DataFrame
+    breadth_df = pd.DataFrame({
+        'Breadth_Pct_Above_MA125': above_ma,
+        'Breadth_Avg_RSI_20': avg_rsi,
+        'Breadth_Avg_Corr_30D': pd.Series(rolling_corr, index=df_close.index)
+    })
     
     # Fix NaN correlazione
     breadth_df['Breadth_Avg_Corr_30D'] = breadth_df['Breadth_Avg_Corr_30D'].ffill().fillna(0.5)
@@ -289,16 +290,15 @@ def run_backtest(df_master, initial_capital=INITIAL_CAPITAL):
     """
     df = df_master.copy()
     
-    # Returns giornalieri SPX - assicurati che SPX_Price sia 1D
-    spx_price = df['SPX_Price'].squeeze()
-    df['SPX_Returns'] = spx_price.pct_change()
+    # Returns giornalieri SPX
+    df['SPX_Returns'] = df['SPX_Price'].pct_change()
     
     # Buy & Hold
-    df['BuyHold_Equity'] = initial_capital * (1 + df['SPX_Returns'].squeeze()).cumprod()
+    df['BuyHold_Equity'] = initial_capital * (1 + df['SPX_Returns']).cumprod()
     
     # Strategia Dinamica
-    df['Strategy_Returns'] = df['SPX_Returns'].squeeze() * df['Exposure'].squeeze()
-    df['Strategy_Equity'] = initial_capital * (1 + df['Strategy_Returns'].squeeze()).cumprod()
+    df['Strategy_Returns'] = df['SPX_Returns'] * df['Exposure']
+    df['Strategy_Equity'] = initial_capital * (1 + df['Strategy_Returns']).cumprod()
     
     # Calcola metriche
     valid_data = df.dropna(subset=['BuyHold_Equity', 'Strategy_Equity'])
@@ -366,21 +366,67 @@ def run_complete_analysis():
     # 4. Calcola eventi target
     target_events = calculate_target_events(spx_prices)
     
-    # 5. Calcola segnali
-    df_signals = calculate_signals(breadth_df)
-    
-    # 6. Merge tutto - approccio semplice con squeeze per forzare 1D
+    # 5. Costruisci df_master ESATTAMENTE come nel notebook originale
     df_master = breadth_df.copy()
+    df_master = df_master.join(target_events, how='inner')  # Usa .join() come nel notebook
+    df_master['SPX_Price'] = spx_prices  # Assegnazione diretta
     
-    # Usa squeeze() per convertire qualsiasi (n,1) in (n,) prima di assegnare
-    for col in target_events.columns:
-        df_master[col] = target_events[col].squeeze()
+    # 6. Calcola segnali DIRETTAMENTE su df_master (come nel notebook)
+    # BOTTOM FORTE
+    signal_bottom_strong = (
+        (df_master['Breadth_Pct_Above_MA125'] <= BottomThresholds.STRONG_BREADTH) &
+        (df_master['Breadth_Avg_RSI_20'] <= BottomThresholds.STRONG_RSI) &
+        (df_master['Breadth_Avg_Corr_30D'] > BottomThresholds.STRONG_CORR)
+    )
     
-    df_master['Exposure'] = df_signals['Exposure'].squeeze()
-    df_master['Signal'] = df_signals['Signal'].squeeze()
-    df_master['SPX_Price'] = spx_prices.squeeze()
+    # BOTTOM MODERATO
+    signal_bottom_moderate = (
+        (df_master['Breadth_Pct_Above_MA125'] <= BottomThresholds.MODERATE_BREADTH) &
+        (df_master['Breadth_Avg_RSI_20'] <= BottomThresholds.MODERATE_RSI) &
+        (df_master['Breadth_Avg_Corr_30D'] > BottomThresholds.MODERATE_CORR) &
+        ~signal_bottom_strong
+    )
     
-    # Verifica che il merge sia riuscito
+    # RISK: Euforia
+    signal_risk_euphoria = (
+        (df_master['Breadth_Pct_Above_MA125'] > RiskThresholds.EUPHORIA_BREADTH) &
+        (df_master['Breadth_Avg_Corr_30D'] < RiskThresholds.EUPHORIA_CORR)
+    )
+    
+    # RISK: Deterioramento
+    signal_risk_deterioration = (
+        (df_master['Breadth_Pct_Above_MA125'] < RiskThresholds.DETERIORATION_BREADTH) &
+        (df_master['Breadth_Avg_RSI_20'] > RiskThresholds.DETERIORATION_RSI)
+    )
+    
+    # RISK: Crollo
+    df_master['Breadth_Change_5d'] = df_master['Breadth_Pct_Above_MA125'].diff(5)
+    signal_risk_crash = df_master['Breadth_Change_5d'] < RiskThresholds.CRASH_BREADTH_CHANGE
+    
+    # Calcola esposizione (come nel notebook)
+    df_master['Exposure'] = DefaultSettings.NEUTRAL_EXPOSURE
+    df_master['Signal'] = 'NEUTRAL'
+    
+    # PRIORITÀ 1: BOTTOM
+    df_master.loc[signal_bottom_strong, 'Exposure'] = BottomThresholds.STRONG_EXPOSURE
+    df_master.loc[signal_bottom_strong, 'Signal'] = 'BUY_STRONG'
+    
+    df_master.loc[signal_bottom_moderate, 'Exposure'] = BottomThresholds.MODERATE_EXPOSURE
+    df_master.loc[signal_bottom_moderate, 'Signal'] = 'BUY_MODERATE'
+    
+    # PRIORITÀ 2: RISK
+    neutral_mask = (df_master['Signal'] == 'NEUTRAL')
+    
+    df_master.loc[neutral_mask & signal_risk_euphoria, 'Exposure'] = RiskThresholds.EUPHORIA_EXPOSURE
+    df_master.loc[neutral_mask & signal_risk_euphoria, 'Signal'] = 'RISK_EUPHORIA'
+    
+    df_master.loc[neutral_mask & signal_risk_deterioration, 'Exposure'] = RiskThresholds.DETERIORATION_EXPOSURE
+    df_master.loc[neutral_mask & signal_risk_deterioration, 'Signal'] = 'RISK_DETERIORATION'
+    
+    df_master.loc[neutral_mask & signal_risk_crash, 'Exposure'] = RiskThresholds.CRASH_EXPOSURE
+    df_master.loc[neutral_mask & signal_risk_crash, 'Signal'] = 'RISK_CRASH'
+    
+    # Verifica
     if df_master.empty:
         raise ValueError("DataFrame master vuoto dopo merge!")
     
