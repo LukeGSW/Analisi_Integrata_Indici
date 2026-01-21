@@ -110,14 +110,14 @@ def calculate_market_breadth(df_close, df_high, df_low):
     
     # 1. % Indici sopra MA125
     ma_125 = df_close.rolling(window=BreadthSettings.MA_PERIOD).mean()
-    above_ma = (df_close > ma_125).sum(axis=1) / df_close.shape[1]
+    above_ma = ((df_close > ma_125).sum(axis=1) / df_close.shape[1]).squeeze()
     
     # 2. RSI Medio
     rsi_values = pd.DataFrame()
     for col in df_close.columns:
         rsi = ta.rsi(df_close[col], length=BreadthSettings.RSI_PERIOD)
         rsi_values[col] = rsi
-    avg_rsi = rsi_values.mean(axis=1)
+    avg_rsi = rsi_values.mean(axis=1).squeeze()
     
     # 3. Correlazione Rolling 30D
     returns = df_close.pct_change()
@@ -145,12 +145,11 @@ def calculate_market_breadth(df_close, df_high, df_low):
             avg_corr = avg_correlation_robust(window)
             rolling_corr.append(avg_corr)
     
-    # Crea DataFrame - IMPORTANTE: converti rolling_corr in Series prima
-    breadth_df = pd.DataFrame({
-        'Breadth_Pct_Above_MA125': above_ma,
-        'Breadth_Avg_RSI_20': avg_rsi,
-        'Breadth_Avg_Corr_30D': pd.Series(rolling_corr, index=df_close.index)
-    })
+    # Crea DataFrame - IMPORTANTE: tutte le Series devono essere 1D
+    breadth_df = pd.DataFrame(index=df_close.index)
+    breadth_df['Breadth_Pct_Above_MA125'] = above_ma
+    breadth_df['Breadth_Avg_RSI_20'] = avg_rsi
+    breadth_df['Breadth_Avg_Corr_30D'] = pd.Series(rolling_corr, index=df_close.index)
     
     # Fix NaN correlazione
     breadth_df['Breadth_Avg_Corr_30D'] = breadth_df['Breadth_Avg_Corr_30D'].ffill().fillna(0.5)
@@ -290,15 +289,16 @@ def run_backtest(df_master, initial_capital=INITIAL_CAPITAL):
     """
     df = df_master.copy()
     
-    # Returns giornalieri SPX
-    df['SPX_Returns'] = df['SPX_Price'].pct_change()
+    # Returns giornalieri SPX - assicurati che SPX_Price sia 1D
+    spx_price = df['SPX_Price'].squeeze()
+    df['SPX_Returns'] = spx_price.pct_change()
     
     # Buy & Hold
-    df['BuyHold_Equity'] = initial_capital * (1 + df['SPX_Returns']).cumprod()
+    df['BuyHold_Equity'] = initial_capital * (1 + df['SPX_Returns'].squeeze()).cumprod()
     
     # Strategia Dinamica
-    df['Strategy_Returns'] = df['SPX_Returns'] * df['Exposure']
-    df['Strategy_Equity'] = initial_capital * (1 + df['Strategy_Returns']).cumprod()
+    df['Strategy_Returns'] = df['SPX_Returns'].squeeze() * df['Exposure'].squeeze()
+    df['Strategy_Equity'] = initial_capital * (1 + df['Strategy_Returns'].squeeze()).cumprod()
     
     # Calcola metriche
     valid_data = df.dropna(subset=['BuyHold_Equity', 'Strategy_Equity'])
@@ -363,25 +363,22 @@ def run_complete_analysis():
     df_close_aligned = df_close.loc[breadth_df.index]
     spx_prices = df_close_aligned['S&P 500']
     
-    # Forza conversione a Series 1D se necessario
-    if isinstance(spx_prices, pd.DataFrame):
-        spx_prices = spx_prices.squeeze()  # Converti DataFrame a Series
-    
     # 4. Calcola eventi target
     target_events = calculate_target_events(spx_prices)
     
     # 5. Calcola segnali
     df_signals = calculate_signals(breadth_df)
     
-    # 6. Merge tutto (costruzione esplicita)
+    # 6. Merge tutto - approccio semplice con squeeze per forzare 1D
     df_master = breadth_df.copy()
     
-    # Aggiungi colonne una per una come array 1D
-    df_master['Target_Bottom'] = target_events['Target_Bottom'].values
-    df_master['Target_Top'] = target_events['Target_Top'].values
-    df_master['Exposure'] = df_signals['Exposure'].values
-    df_master['Signal'] = df_signals['Signal'].values
-    df_master['SPX_Price'] = spx_prices.values
+    # Usa squeeze() per convertire qualsiasi (n,1) in (n,) prima di assegnare
+    for col in target_events.columns:
+        df_master[col] = target_events[col].squeeze()
+    
+    df_master['Exposure'] = df_signals['Exposure'].squeeze()
+    df_master['Signal'] = df_signals['Signal'].squeeze()
+    df_master['SPX_Price'] = spx_prices.squeeze()
     
     # Verifica che il merge sia riuscito
     if df_master.empty:
