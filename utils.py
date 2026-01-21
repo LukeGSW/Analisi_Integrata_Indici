@@ -136,12 +136,12 @@ def calculate_market_breadth(df_close, df_high, df_low):
             avg_corr = avg_correlation_robust(window)
             rolling_corr.append(avg_corr)
     
-    # Crea DataFrame
+    # Crea DataFrame - IMPORTANTE: converti rolling_corr in Series prima
     breadth_df = pd.DataFrame({
         'Breadth_Pct_Above_MA125': above_ma,
         'Breadth_Avg_RSI_20': avg_rsi,
-        'Breadth_Avg_Corr_30D': rolling_corr
-    }, index=df_close.index)
+        'Breadth_Avg_Corr_30D': pd.Series(rolling_corr, index=df_close.index)
+    })
     
     # Fix NaN correlazione
     breadth_df['Breadth_Avg_Corr_30D'] = breadth_df['Breadth_Avg_Corr_30D'].ffill().fillna(0.5)
@@ -357,34 +357,13 @@ def run_complete_analysis():
     # 5. Calcola segnali
     df_signals = calculate_signals(breadth_df)
     
-    # 5.5 VERIFICA ALLINEAMENTO INDICI COMPLETO
-    # Assicurati che tutti abbiano lo stesso index
-    base_index = breadth_df.index
-    
-    # Riallinea target_events
-    if not target_events.index.equals(base_index):
-        target_events = target_events.reindex(base_index)
-    
-    # Riallinea df_signals (dovrebbe già essere allineato ma verifica)
-    if not df_signals.index.equals(base_index):
-        df_signals = df_signals.reindex(base_index)
-    
-    # Riallinea spx_prices
-    spx_prices_aligned = spx_prices.reindex(base_index)
-    
-    # 6. Merge tutto con index esplicito
-    df_master = pd.DataFrame(index=base_index)
-    
-    # Aggiungi colonne una per una
-    for col in breadth_df.columns:
-        df_master[col] = breadth_df[col]
-    
-    for col in target_events.columns:
-        df_master[col] = target_events[col]
-    
-    df_master['Exposure'] = df_signals['Exposure']
-    df_master['Signal'] = df_signals['Signal']
-    df_master['SPX_Price'] = spx_prices_aligned
+    # 6. Merge tutto - ora breadth_df ha index corretto
+    df_master = pd.concat([
+        breadth_df,
+        target_events,
+        df_signals[['Exposure', 'Signal']],
+        spx_prices.to_frame('SPX_Price')
+    ], axis=1)
     
     # Verifica che il merge sia riuscito
     if df_master.empty:
