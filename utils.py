@@ -76,17 +76,26 @@ def load_all_indices(indices_dict):
     if len(common_dates) == 0:
         raise ValueError("Nessuna data comune tra gli indici! Verifica i dati.")
     
-    # Crea DataFrame allineati CON INDEX ESPLICITO
+    # --- FIX DIMENSIONALITÀ ---
+    def _get_1d_series(source_df, col_name, dates):
+        """Estrae una colonna e assicura che sia 1D Series (N,)"""
+        data = source_df.loc[dates, col_name]
+        # Se yfinance restituisce un DataFrame (N, 1), prendiamo la prima colonna
+        if isinstance(data, pd.DataFrame):
+            return data.iloc[:, 0]
+        return data
+
+    # Crea DataFrame allineati CON INDEX ESPLICITO e dati 1D forzati
     df_close = pd.DataFrame(
-        {name: df.loc[common_dates, 'Close'] for name, df in raw_data.items()},
+        {name: _get_1d_series(df, 'Close', common_dates) for name, df in raw_data.items()},
         index=common_dates
     )
     df_high = pd.DataFrame(
-        {name: df.loc[common_dates, 'High'] for name, df in raw_data.items()},
+        {name: _get_1d_series(df, 'High', common_dates) for name, df in raw_data.items()},
         index=common_dates
     )
     df_low = pd.DataFrame(
-        {name: df.loc[common_dates, 'Low'] for name, df in raw_data.items()},
+        {name: _get_1d_series(df, 'Low', common_dates) for name, df in raw_data.items()},
         index=common_dates
     )
     
