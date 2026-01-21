@@ -72,10 +72,18 @@ def load_all_indices(indices_dict):
         else:
             common_dates = common_dates.intersection(df.index)
     
+    # Verifica che ci siano date comuni
+    if len(common_dates) == 0:
+        raise ValueError("Nessuna data comune tra gli indici! Verifica i dati.")
+    
     # Crea DataFrame allineati
     df_close = pd.DataFrame({name: df.loc[common_dates, 'Close'] for name, df in raw_data.items()})
     df_high = pd.DataFrame({name: df.loc[common_dates, 'High'] for name, df in raw_data.items()})
     df_low = pd.DataFrame({name: df.loc[common_dates, 'Low'] for name, df in raw_data.items()})
+    
+    # Verifica che i DataFrame non siano vuoti
+    if df_close.empty or df_high.empty or df_low.empty:
+        raise ValueError("DataFrame allineati vuoti! Problema nel download dati.")
     
     return raw_data, df_close, df_high, df_low
 
@@ -349,13 +357,38 @@ def run_complete_analysis():
     # 5. Calcola segnali
     df_signals = calculate_signals(breadth_df)
     
-    # 6. Merge tutto
-    df_master = pd.concat([
-        breadth_df,
-        target_events,
-        df_signals[['Exposure', 'Signal']],
-        spx_prices.to_frame('SPX_Price')  # Converti Series a DataFrame mantenendo index
-    ], axis=1)
+    # 5.5 VERIFICA ALLINEAMENTO INDICI COMPLETO
+    # Assicurati che tutti abbiano lo stesso index
+    base_index = breadth_df.index
+    
+    # Riallinea target_events
+    if not target_events.index.equals(base_index):
+        target_events = target_events.reindex(base_index)
+    
+    # Riallinea df_signals (dovrebbe già essere allineato ma verifica)
+    if not df_signals.index.equals(base_index):
+        df_signals = df_signals.reindex(base_index)
+    
+    # Riallinea spx_prices
+    spx_prices_aligned = spx_prices.reindex(base_index)
+    
+    # 6. Merge tutto con index esplicito
+    df_master = pd.DataFrame(index=base_index)
+    
+    # Aggiungi colonne una per una
+    for col in breadth_df.columns:
+        df_master[col] = breadth_df[col]
+    
+    for col in target_events.columns:
+        df_master[col] = target_events[col]
+    
+    df_master['Exposure'] = df_signals['Exposure']
+    df_master['Signal'] = df_signals['Signal']
+    df_master['SPX_Price'] = spx_prices_aligned
+    
+    # Verifica che il merge sia riuscito
+    if df_master.empty:
+        raise ValueError("DataFrame master vuoto dopo merge!")
     
     # 7. Backtest
     df_master, metrics = run_backtest(df_master)
