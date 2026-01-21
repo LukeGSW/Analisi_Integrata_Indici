@@ -363,21 +363,25 @@ def run_complete_analysis():
     df_close_aligned = df_close.loc[breadth_df.index]
     spx_prices = df_close_aligned['S&P 500']
     
+    # Forza conversione a Series 1D se necessario
+    if isinstance(spx_prices, pd.DataFrame):
+        spx_prices = spx_prices.squeeze()  # Converti DataFrame a Series
+    
     # 4. Calcola eventi target
     target_events = calculate_target_events(spx_prices)
     
     # 5. Calcola segnali
     df_signals = calculate_signals(breadth_df)
     
-    # 6. Merge tutto (senza SPX_Price prima)
-    df_master = pd.concat([
-        breadth_df,
-        target_events,
-        df_signals[['Exposure', 'Signal']]
-    ], axis=1, join='inner')
+    # 6. Merge tutto (costruzione esplicita)
+    df_master = breadth_df.copy()
     
-    # Aggiungi SPX_Price come Series (non DataFrame)
-    df_master['SPX_Price'] = spx_prices.loc[df_master.index]
+    # Aggiungi colonne una per una come array 1D
+    df_master['Target_Bottom'] = target_events['Target_Bottom'].values
+    df_master['Target_Top'] = target_events['Target_Top'].values
+    df_master['Exposure'] = df_signals['Exposure'].values
+    df_master['Signal'] = df_signals['Signal'].values
+    df_master['SPX_Price'] = spx_prices.values
     
     # Verifica che il merge sia riuscito
     if df_master.empty:
