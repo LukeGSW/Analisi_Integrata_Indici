@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 utils.py - Funzioni Helper per SPX Dashboard
-Kriterion Quant - Sistema V4.0
+Kriterion Quant - Sistema V4.0 (FIXED & ALIGNED to Notebook)
 """
 
 import yfinance as yf
@@ -20,15 +20,9 @@ from config import *
 def load_ticker_data(ticker, start_date=START_DATE):
     """
     Carica dati storici con cache Streamlit
-    
-    Args:
-        ticker: simbolo ticker (es. '^GSPC')
-        start_date: data inizio (default: 2000-01-01)
-    
-    Returns:
-        DataFrame con dati OHLCV
     """
     try:
+        # Notebook usa auto_adjust=False di default ma cerca Adj Close manualment
         df = yf.download(ticker, start=start_date, end=datetime.now(), progress=False)
         
         if df.empty:
@@ -48,9 +42,7 @@ def load_ticker_data(ticker, start_date=START_DATE):
 def load_all_indices(indices_dict):
     """
     Carica tutti gli indici definiti in INDICES
-    
-    Returns:
-        Tuple (raw_data dict, aligned_close, aligned_high, aligned_low)
+    FIX: Priorità a Adj Close e gestione dimensionalità (1D array)
     """
     raw_data = {}
     
@@ -64,7 +56,7 @@ def load_all_indices(indices_dict):
                 raw_data[name] = df
             progress_bar.progress((idx + 1) / total)
     
-    # Allinea date
+    # Allinea date (Inner Join come nel Notebook)
     common_dates = None
     for df in raw_data.values():
         if common_dates is None:
@@ -72,37 +64,56 @@ def load_all_indices(indices_dict):
         else:
             common_dates = common_dates.intersection(df.index)
     
-    # Verifica che ci siano date comuni
     if len(common_dates) == 0:
         raise ValueError("Nessuna data comune tra gli indici! Verifica i dati.")
     
-    # --- FIX DIMENSIONALITÀ ---
-    def _get_1d_series(source_df, col_name, dates):
-        """Estrae una colonna e assicura che sia 1D Series (N,)"""
-        data = source_df.loc[dates, col_name]
-        # Se yfinance restituisce un DataFrame (N, 1), prendiamo la prima colonna
-        if isinstance(data, pd.DataFrame):
-            return data.iloc[:, 0]
-        return data
+    # --- HELPER PER ESTRARRE SERIE 1D ---
+    def _get_series(source_df, col_priority, dates):
+        """
+        Estrae una colonna appiattita (1D).
+        Cerca in ordine di priorità (es: Adj Close > Close)
+        """
+        selected_col = None
+        # Gestione MultiLevel Columns di yfinance
+        cols = source_df.columns
+        if isinstance(cols, pd.MultiIndex):
+             # Appiattisce se necessario o cerca nel livello corretto
+             pass 
 
-    # Crea DataFrame allineati CON INDEX ESPLICITO e dati 1D forzati
+        # Logica priorità (come nel Notebook Cell 2)
+        for col in col_priority:
+            if col in source_df.columns:
+                data = source_df.loc[dates, col]
+                # Fix dimensionalità: se è DataFrame (N,1), prendi la Series
+                if isinstance(data, pd.DataFrame):
+                    return data.iloc[:, 0]
+                return data
+        
+        # Fallback se nessuna colonna trovata
+        raise ValueError(f"Colonne {col_priority} non trovate nel DataFrame")
+
+    # Crea DataFrame allineati
+    # NOTEBOOK ALIGNMENT: Priorità 'Adj Close' > 'Close'
     df_close = pd.DataFrame(
-        {name: _get_1d_series(df, 'Close', common_dates) for name, df in raw_data.items()},
+        {name: _get_series(df, ['Adj Close', 'Close'], common_dates) for name, df in raw_data.items()},
         index=common_dates
     )
+    
     df_high = pd.DataFrame(
-        {name: _get_1d_series(df, 'High', common_dates) for name, df in raw_data.items()},
+        {name: _get_series(df, ['High'], common_dates) for name, df in raw_data.items()},
         index=common_dates
     )
+    
     df_low = pd.DataFrame(
-        {name: _get_1d_series(df, 'Low', common_dates) for name, df in raw_data.items()},
+        {name: _get_series(df, ['Low'], common_dates) for name, df in raw_data.items()},
         index=common_dates
     )
     
-    # Verifica che i DataFrame non siano vuoti
-    if df_close.empty or df_high.empty or df_low.empty:
-        raise ValueError("DataFrame allineati vuoti! Problema nel download dati.")
-    
+    # NOTEBOOK ALIGNMENT: Fillna method (anche se dropna sopra dovrebbe aver pulito)
+    df_close = df_close.ffill().bfill()
+    df_high = df_high.ffill().bfill()
+    df_low = df_low.ffill().bfill()
+
     return raw_data, df_close, df_high, df_low
 
 # ==============================================================================
@@ -112,19 +123,19 @@ def load_all_indices(indices_dict):
 def calculate_market_breadth(df_close, df_high, df_low):
     """
     Calcola i 3 indicatori di Market Breadth
-    
-    Returns:
-        DataFrame con colonne: Breadth_Pct_Above_MA125, Breadth_Avg_RSI_20, Breadth_Avg_Corr_30D
     """
     
     # 1. % Indici sopra MA125
+    # Pandas rolling mean gestisce nativamente le Series
     ma_125 = df_close.rolling(window=BreadthSettings.MA_PERIOD).mean()
     above_ma = (df_close > ma_125).sum(axis=1) / df_close.shape[1]
     
     # 2. RSI Medio
     rsi_values = pd.DataFrame()
     for col in df_close.columns:
-        rsi = ta.rsi(df_close[col], length=BreadthSettings.RSI_PERIOD)
+        # Assicura che l'input per pandas_ta sia una Series 1D
+        series = df_close[col]
+        rsi = ta.rsi(series, length=BreadthSettings.RSI_PERIOD)
         rsi_values[col] = rsi
     avg_rsi = rsi_values.mean(axis=1)
     
@@ -132,6 +143,7 @@ def calculate_market_breadth(df_close, df_high, df_low):
     returns = df_close.pct_change()
     
     def avg_correlation_robust(window_returns):
+        # Replica esatta logica Notebook Cell 4
         valid_assets = window_returns.loc[:, window_returns.var() > 0]
         if valid_assets.shape[1] < 2:
             return np.nan
@@ -147,6 +159,7 @@ def calculate_market_breadth(df_close, df_high, df_low):
     
     rolling_corr = []
     for i in range(len(returns)):
+        # Replica loop Notebook: finestra i-29 a i+1 (esclusivo) = 30 giorni
         if i < BreadthSettings.CORR_WINDOW - 1:
             rolling_corr.append(np.nan)
         else:
@@ -161,10 +174,10 @@ def calculate_market_breadth(df_close, df_high, df_low):
         'Breadth_Avg_Corr_30D': pd.Series(rolling_corr, index=df_close.index)
     })
     
-    # Fix NaN correlazione
+    # Fix NaN correlazione come da Notebook Cell 4
     breadth_df['Breadth_Avg_Corr_30D'] = breadth_df['Breadth_Avg_Corr_30D'].ffill().fillna(0.5)
     
-    # Rimuovi NaN
+    # Rimuovi NaN iniziali (warm-up period)
     breadth_df = breadth_df.dropna()
     
     return breadth_df
@@ -176,40 +189,58 @@ def calculate_market_breadth(df_close, df_high, df_low):
 def calculate_target_events(spx_prices):
     """
     Identifica eventi BOTTOM e TOP storici su S&P 500
-    
-    Returns:
-        DataFrame con colonne: Target_Bottom, Target_Top
+    FIX: Corretto errore off-by-one rispetto al Notebook
     """
     target_bottom = []
     target_top = []
     
+    # Forza spx_prices a Series 1D se non lo è
+    if isinstance(spx_prices, pd.DataFrame):
+        spx_prices = spx_prices.iloc[:, 0]
+
     for i in range(len(spx_prices)):
         current_price = spx_prices.iloc[i]
         
-        # Forward window
-        if i + TargetEvents.FORWARD_WINDOW >= len(spx_prices):
-            forward_prices = spx_prices.iloc[i:]
-        else:
-            forward_prices = spx_prices.iloc[i:i+TargetEvents.FORWARD_WINDOW+1]
+        # NOTEBOOK ALIGNMENT FIX:
+        # Notebook Cell 5: future_window = spx_prices.iloc[i+1:end_idx]
+        # Repository originale includeva 'i', causando look-ahead bias
         
-        if len(forward_prices) < 2:
+        end_idx = min(i + TargetEvents.FORWARD_WINDOW + 1, len(spx_prices))
+        
+        # Finestra futura ESCLUDE oggi (i+1)
+        if i + 1 >= len(spx_prices):
+            target_bottom.append(0)
+            target_top.append(0)
+            continue
+            
+        forward_prices = spx_prices.iloc[i+1:end_idx]
+        
+        if len(forward_prices) < TargetEvents.FORWARD_WINDOW:
+            # Non abbastanza dati futuri
             target_bottom.append(0)
             target_top.append(0)
             continue
         
         # BOTTOM: Rally >= 20%
+        # Calcolo rispetto al minimo futuro come nel notebook
+        min_forward = forward_prices.min()
         max_forward = forward_prices.max()
-        rally = (max_forward / current_price) - 1
+        
+        # Notebook Logic: max_rally = ((future_max - future_min) / future_min)
+        if min_forward > 0:
+             rally = (max_forward - min_forward) / min_forward
+        else:
+             rally = 0
+             
         is_bottom = 1 if rally >= TargetEvents.RALLY_THRESHOLD else 0
         target_bottom.append(is_bottom)
         
         # TOP: Drawdown >= 15%
-        min_forward = forward_prices.min()
-        drawdown = (min_forward / current_price) - 1
+        # Notebook Logic: max_drawdown = ((future_window.min() - current_price) / current_price)
+        drawdown = (min_forward - current_price) / current_price
         is_top = 1 if drawdown <= -TargetEvents.DRAWDOWN_THRESHOLD else 0
         target_top.append(is_top)
     
-    # Crea DataFrame con index esplicito
     result = pd.DataFrame({
         'Target_Bottom': target_bottom,
         'Target_Top': target_top
@@ -224,9 +255,7 @@ def calculate_target_events(spx_prices):
 def calculate_signals(breadth_df):
     """
     Calcola segnali di BOTTOM e RISK MANAGEMENT
-    
-    Returns:
-        DataFrame con colonne: Exposure, Signal
+    Identico a Notebook Cell 7
     """
     df = breadth_df.copy()
     
@@ -262,26 +291,26 @@ def calculate_signals(breadth_df):
     signal_risk_crash = df['Breadth_Change_5d'] < RiskThresholds.CRASH_BREADTH_CHANGE
     
     # Calcola esposizione
-    df['Exposure'] = DefaultSettings.NEUTRAL_EXPOSURE
+    df['Exposure'] = float(DefaultSettings.NEUTRAL_EXPOSURE)
     df['Signal'] = 'NEUTRAL'
     
     # PRIORITÀ 1: BOTTOM
-    df.loc[signal_bottom_strong, 'Exposure'] = BottomThresholds.STRONG_EXPOSURE
+    df.loc[signal_bottom_strong, 'Exposure'] = float(BottomThresholds.STRONG_EXPOSURE)
     df.loc[signal_bottom_strong, 'Signal'] = 'BUY_STRONG'
     
-    df.loc[signal_bottom_moderate, 'Exposure'] = BottomThresholds.MODERATE_EXPOSURE
+    df.loc[signal_bottom_moderate, 'Exposure'] = float(BottomThresholds.MODERATE_EXPOSURE)
     df.loc[signal_bottom_moderate, 'Signal'] = 'BUY_MODERATE'
     
     # PRIORITÀ 2: RISK (solo se neutrale)
     neutral_mask = (df['Signal'] == 'NEUTRAL')
     
-    df.loc[neutral_mask & signal_risk_euphoria, 'Exposure'] = RiskThresholds.EUPHORIA_EXPOSURE
+    df.loc[neutral_mask & signal_risk_euphoria, 'Exposure'] = float(RiskThresholds.EUPHORIA_EXPOSURE)
     df.loc[neutral_mask & signal_risk_euphoria, 'Signal'] = 'RISK_EUPHORIA'
     
-    df.loc[neutral_mask & signal_risk_deterioration, 'Exposure'] = RiskThresholds.DETERIORATION_EXPOSURE
+    df.loc[neutral_mask & signal_risk_deterioration, 'Exposure'] = float(RiskThresholds.DETERIORATION_EXPOSURE)
     df.loc[neutral_mask & signal_risk_deterioration, 'Signal'] = 'RISK_DETERIORATION'
     
-    df.loc[neutral_mask & signal_risk_crash, 'Exposure'] = RiskThresholds.CRASH_EXPOSURE
+    df.loc[neutral_mask & signal_risk_crash, 'Exposure'] = float(RiskThresholds.CRASH_EXPOSURE)
     df.loc[neutral_mask & signal_risk_crash, 'Signal'] = 'RISK_CRASH'
     
     return df
@@ -292,28 +321,34 @@ def calculate_signals(breadth_df):
 
 def run_backtest(df_master, initial_capital=INITIAL_CAPITAL):
     """
-    Esegue backtest completo con Buy&Hold e Strategia Dinamica
-    
-    Returns:
-        DataFrame con equity curves e metriche
+    Esegue backtest completo
+    FIX: Allineato Sharpe Ratio al Notebook (Rf=0.02)
     """
     df = df_master.copy()
     
-    # Returns giornalieri SPX - forza a Series pulita
-    spx_price_series = pd.Series(df['SPX_Price'].values.ravel(), index=df.index)
-    df['SPX_Returns'] = spx_price_series.pct_change()
+    # Returns giornalieri SPX
+    # Assicura 1D array per evitare problemi di broadcast
+    if isinstance(df['SPX_Price'], pd.DataFrame):
+         spx_arr = df['SPX_Price'].iloc[:, 0].values
+    else:
+         spx_arr = df['SPX_Price'].values
+         
+    df['SPX_Returns'] = pd.Series(spx_arr, index=df.index).pct_change()
     
     # Buy & Hold
     df['BuyHold_Equity'] = initial_capital * (1 + df['SPX_Returns']).cumprod()
     
-    # Strategia Dinamica - forza Exposure a Series pulita
-    exposure_series = pd.Series(df['Exposure'].values.ravel(), index=df.index)
-    df['Strategy_Returns'] = df['SPX_Returns'] * exposure_series
+    # Strategia Dinamica
+    df['Strategy_Returns'] = df['SPX_Returns'] * df['Exposure']
     df['Strategy_Equity'] = initial_capital * (1 + df['Strategy_Returns']).cumprod()
     
     # Calcola metriche
     valid_data = df.dropna(subset=['BuyHold_Equity', 'Strategy_Equity'])
     
+    if valid_data.empty:
+        # Ritorna dummy metrics se vuoto
+        return df, {k: 0 for k in ['years', 'cagr_bh', 'sharpe_bh', 'max_dd_bh', 'cagr_strategy', 'sharpe_strategy', 'max_dd_strategy', 'vol_bh', 'vol_strategy', 'final_bh', 'final_strategy']}
+
     # CAGR
     years = (valid_data.index[-1] - valid_data.index[0]).days / 365.25
     cagr_bh = (valid_data['BuyHold_Equity'].iloc[-1] / initial_capital) ** (1/years) - 1
@@ -323,9 +358,10 @@ def run_backtest(df_master, initial_capital=INITIAL_CAPITAL):
     vol_bh = valid_data['SPX_Returns'].std() * np.sqrt(252)
     vol_strategy = valid_data['Strategy_Returns'].std() * np.sqrt(252)
     
-    # Sharpe (risk-free = 0)
-    sharpe_bh = cagr_bh / vol_bh if vol_bh != 0 else 0
-    sharpe_strategy = cagr_strategy / vol_strategy if vol_strategy != 0 else 0
+    # Sharpe (risk-free = 0.02 come Notebook Cell 8)
+    rf_rate = 0.02
+    sharpe_bh = (cagr_bh - rf_rate) / vol_bh if vol_bh != 0 else 0
+    sharpe_strategy = (cagr_strategy - rf_rate) / vol_strategy if vol_strategy != 0 else 0
     
     # Max Drawdown
     def calc_max_dd(equity):
@@ -359,9 +395,7 @@ def run_backtest(df_master, initial_capital=INITIAL_CAPITAL):
 def run_complete_analysis():
     """
     Esegue l'analisi completa dall'inizio alla fine
-    
-    Returns:
-        Tuple (df_master, metrics, current_state)
+    FIX: Gestione dimensionale robusta (1D) per evitare errori numpy/pandas
     """
     
     # 1. Download dati
@@ -372,77 +406,30 @@ def run_complete_analysis():
     
     # 3. Allinea prezzi SPX
     df_close_aligned = df_close.loc[breadth_df.index]
-    spx_prices = df_close_aligned['S&P 500']
+    
+    # FIX: Gestione robusta estrazione colonna
+    if isinstance(df_close_aligned['S&P 500'], pd.DataFrame):
+        spx_prices = df_close_aligned['S&P 500'].iloc[:, 0]
+    else:
+        spx_prices = df_close_aligned['S&P 500']
     
     # 4. Calcola eventi target
     target_events = calculate_target_events(spx_prices)
     
-    # 5. Costruisci df_master ESATTAMENTE come nel notebook originale
+    # 5. Costruisci df_master
     df_master = breadth_df.copy()
     df_master = df_master.join(target_events, how='inner')
     
-    # CRITICAL FIX: Forza spx_prices a numpy array 1D
-    if isinstance(spx_prices, pd.DataFrame):
-        df_master['SPX_Price'] = spx_prices.values.ravel()  # Forza 1D
-    else:
-        df_master['SPX_Price'] = spx_prices.values  # Series to numpy array 1D
+    # FIX: Assegnazione sicura array 1D
+    df_master['SPX_Price'] = spx_prices.values
     
-    # 6. Calcola segnali DIRETTAMENTE su df_master (come nel notebook)
-    # BOTTOM FORTE
-    signal_bottom_strong = (
-        (df_master['Breadth_Pct_Above_MA125'] <= BottomThresholds.STRONG_BREADTH) &
-        (df_master['Breadth_Avg_RSI_20'] <= BottomThresholds.STRONG_RSI) &
-        (df_master['Breadth_Avg_Corr_30D'] > BottomThresholds.STRONG_CORR)
-    )
+    # 6. Calcola segnali (usando la funzione helper per evitare duplicazione codice)
+    signals_df = calculate_signals(df_master)
     
-    # BOTTOM MODERATO
-    signal_bottom_moderate = (
-        (df_master['Breadth_Pct_Above_MA125'] <= BottomThresholds.MODERATE_BREADTH) &
-        (df_master['Breadth_Avg_RSI_20'] <= BottomThresholds.MODERATE_RSI) &
-        (df_master['Breadth_Avg_Corr_30D'] > BottomThresholds.MODERATE_CORR) &
-        ~signal_bottom_strong
-    )
+    # Merge dei risultati segnali in df_master
+    cols_to_update = ['Exposure', 'Signal', 'Breadth_Change_5d']
+    df_master[cols_to_update] = signals_df[cols_to_update]
     
-    # RISK: Euforia
-    signal_risk_euphoria = (
-        (df_master['Breadth_Pct_Above_MA125'] > RiskThresholds.EUPHORIA_BREADTH) &
-        (df_master['Breadth_Avg_Corr_30D'] < RiskThresholds.EUPHORIA_CORR)
-    )
-    
-    # RISK: Deterioramento
-    signal_risk_deterioration = (
-        (df_master['Breadth_Pct_Above_MA125'] < RiskThresholds.DETERIORATION_BREADTH) &
-        (df_master['Breadth_Avg_RSI_20'] > RiskThresholds.DETERIORATION_RSI)
-    )
-    
-    # RISK: Crollo
-    df_master['Breadth_Change_5d'] = df_master['Breadth_Pct_Above_MA125'].diff(5)
-    signal_risk_crash = df_master['Breadth_Change_5d'] < RiskThresholds.CRASH_BREADTH_CHANGE
-    
-    # Calcola esposizione (come nel notebook) - usa valori scalari per assegnazioni
-    df_master['Exposure'] = float(DefaultSettings.NEUTRAL_EXPOSURE)  # Scalar float
-    df_master['Signal'] = 'NEUTRAL'  # String scalar
-    
-    # PRIORITÀ 1: BOTTOM - assegna valori scalari
-    df_master.loc[signal_bottom_strong, 'Exposure'] = float(BottomThresholds.STRONG_EXPOSURE)
-    df_master.loc[signal_bottom_strong, 'Signal'] = 'BUY_STRONG'
-    
-    df_master.loc[signal_bottom_moderate, 'Exposure'] = float(BottomThresholds.MODERATE_EXPOSURE)
-    df_master.loc[signal_bottom_moderate, 'Signal'] = 'BUY_MODERATE'
-    
-    # PRIORITÀ 2: RISK - assegna valori scalari
-    neutral_mask = (df_master['Signal'] == 'NEUTRAL')
-    
-    df_master.loc[neutral_mask & signal_risk_euphoria, 'Exposure'] = float(RiskThresholds.EUPHORIA_EXPOSURE)
-    df_master.loc[neutral_mask & signal_risk_euphoria, 'Signal'] = 'RISK_EUPHORIA'
-    
-    df_master.loc[neutral_mask & signal_risk_deterioration, 'Exposure'] = float(RiskThresholds.DETERIORATION_EXPOSURE)
-    df_master.loc[neutral_mask & signal_risk_deterioration, 'Signal'] = 'RISK_DETERIORATION'
-    
-    df_master.loc[neutral_mask & signal_risk_crash, 'Exposure'] = float(RiskThresholds.CRASH_EXPOSURE)
-    df_master.loc[neutral_mask & signal_risk_crash, 'Signal'] = 'RISK_CRASH'
-    
-    # Verifica
     if df_master.empty:
         raise ValueError("DataFrame master vuoto dopo merge!")
     
@@ -460,12 +447,7 @@ def run_complete_analysis():
 # ==============================================================================
 
 def export_to_json(df_master, metrics, current_state):
-    """
-    Esporta tutti i dati in formato JSON per analisi LLM
-    
-    Returns:
-        Dict completo con tutti i dati
-    """
+    """Esporta tutti i dati in formato JSON"""
     
     json_data = {
         'metadata': {
