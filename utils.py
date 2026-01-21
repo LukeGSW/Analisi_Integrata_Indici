@@ -354,7 +354,7 @@ def run_complete_analysis():
         breadth_df,
         target_events,
         df_signals[['Exposure', 'Signal']],
-        pd.DataFrame({'SPX_Price': spx_prices})
+        spx_prices.to_frame('SPX_Price')  # Converti Series a DataFrame mantenendo index
     ], axis=1)
     
     # 7. Backtest
